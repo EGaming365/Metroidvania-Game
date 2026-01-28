@@ -109,8 +109,8 @@ func _physics_process(delta):
 	if Input.is_action_just_pressed("ui_dash"):
 		dash_buffer_timer = DASH_BUFFER
 	
-	# Start dash
-	if dash_buffer_timer > 0 and has_dash and not is_dashing:
+	# Start dash (can't dash while on wall)
+	if dash_buffer_timer > 0 and has_dash and not is_dashing and not on_wall:
 		# Check ground dash cooldown only if on ground
 		if on_floor and ground_dash_cooldown_timer > 0:
 			# Can't dash yet
@@ -127,11 +127,10 @@ func _physics_process(delta):
 			else:
 				dash_x = last_move_dir
 			
-			# Vertical direction (disabled during momentum cancel)
+			# Vertical direction (only down, disabled during momentum cancel)
 			if ALLOW_DIAGONAL_DASH and not has_dash_momentum:
-				if input_up and not input_down:
-					dash_y = -1.0
-				elif input_down and not input_up:
+				# Only allow down diagonal, not up
+				if input_down and not input_up:
 					dash_y = 1.0
 			
 			dash_direction = Vector2(dash_x, dash_y).normalized()
