@@ -8,6 +8,11 @@ const FALL_GRAVITY = 1200
 const MAX_FALL_SPEED = 800
 const JUMP_CUT_MULT = 0.35
 
+# Crouch
+const CROUCH_SPEED_MULT = 0.4
+const CROUCH_SCALE = 0.5
+const CROUCH_LOCKOUT = 0.15
+
 # Timers
 const COYOTE_TIME = 0.12
 const JUMP_BUFFER = 0.12
@@ -45,11 +50,13 @@ var wall_coyote_timer = 0.0
 var wall_hop_timer = 0.0
 var wall_jump_timer = 0.0
 var wall_stick_timer = 0.0
+var crouch_lockout_timer = 0.0
 
 # States
 var wall_sticking = false
 var wall_dir = 0
 var last_wall_dir = 0
+var is_crouching = false
 
 # Dash
 var dash_timer = 0.0
@@ -69,6 +76,19 @@ var momentum_iframe_timer = 0.0
 var was_diagonal_dash = false
 var momentum_jump_used = false
 
+# Collision shape references
+@onready var collision_shape = $CollisionShape2D
+var original_height = 0.0
+
+
+func _ready():
+	# Store original height
+	if collision_shape and collision_shape.shape:
+		if collision_shape.shape is RectangleShape2D:
+			original_height = collision_shape.shape.size.y
+		elif collision_shape.shape is CapsuleShape2D:
+			original_height = collision_shape.shape.height
+
 
 func _physics_process(delta):
 	# Update all timers
@@ -81,6 +101,7 @@ func _physics_process(delta):
 	ground_touch_timer -= delta
 	momentum_iframe_timer -= delta
 	ground_dash_cooldown_timer -= delta
+	crouch_lockout_timer -= delta
 	
 	# Check ground and wall
 	var on_floor = is_on_floor()
@@ -99,9 +120,24 @@ func _physics_process(delta):
 	elif input_left and not input_right:
 		move_dir = -1.0
 	
-	# Remember which way we're facing
+	# Remember direction
 	if move_dir != 0:
 		last_move_dir = move_dir
+	
+	
+	# === CROUCH ===
+	
+	# Only crouch on ground with Delay
+	if on_floor and input_down and not is_dashing and crouch_lockout_timer <= 0:
+		if not is_crouching:
+			is_crouching = true
+			update_crouch_shape(true)
+	else:
+		if is_crouching:
+			# Check if there's room to stand up
+			if can_stand_up():
+				is_crouching = false
+				update_crouch_shape(false)
 	
 	
 	# === DASH ===
@@ -111,9 +147,8 @@ func _physics_process(delta):
 	
 	# Start dash (can't dash while on wall)
 	if dash_buffer_timer > 0 and has_dash and not is_dashing and not on_wall:
-		# Check ground dash cooldown only if on ground
+		# Check ground dash cooldown
 		if on_floor and ground_dash_cooldown_timer > 0:
-			# Can't dash yet
 			pass
 		else:
 			var dash_x = 0.0
@@ -127,7 +162,7 @@ func _physics_process(delta):
 			else:
 				dash_x = last_move_dir
 			
-			# Vertical direction (only down, disabled during momentum cancel)
+			# Vertical direction
 			if ALLOW_DIAGONAL_DASH and not has_dash_momentum:
 				# Only allow down diagonal, not up
 				if input_down and not input_up:
@@ -153,9 +188,14 @@ func _physics_process(delta):
 			momentum_iframe_timer = 0
 			momentum_jump_used = false
 			
-			# Set ground cooldown if dashing from ground
+			# Set ground cooldown
 			if last_dash_was_grounded:
 				ground_dash_cooldown_timer = GROUND_DASH_COOLDOWN
+			
+			# Uncrouch when dashing if Available
+			if is_crouching and can_stand_up():
+				is_crouching = false
+				update_crouch_shape(false)
 	
 	
 	# === DASHING STATE ===
@@ -172,6 +212,7 @@ func _physics_process(delta):
 			ground_touch_timer = DASH_MOMENTUM_WINDOW
 			momentum_iframe_timer = DASH_MOMENTUM_IFRAME
 			momentum_jump_used = false
+			crouch_lockout_timer = CROUCH_LOCKOUT  # Prevent crouching briefly
 			velocity.x = dash_direction.x * SPEED * 0.5
 			velocity.y = 0
 		
@@ -185,7 +226,7 @@ func _physics_process(delta):
 	# === NORMAL MOVEMENT ===
 	
 	else:
-		# Refund dash on ground (only if not on cooldown)
+		# Refund dash on ground
 		if on_floor and not has_dash:
 			has_dash = true
 		
@@ -195,19 +236,17 @@ func _physics_process(delta):
 		
 		# Check for directional cancel during momentum
 		if has_dash_momentum and move_dir != 0:
-			# If trying to move opposite direction, cancel momentum
+			# Momentum Cancel
 			if sign(move_dir) != sign(dash_momentum_direction):
 				has_dash_momentum = false
 				ground_touch_timer = 0
 				momentum_iframe_timer = 0
 				momentum_jump_used = false
 		
-		# Momentum cancellation logic
+		# Momentum cancellation
 		if has_dash_momentum:
-			# If we're in the air, reset iframe
 			if not on_floor:
 				momentum_iframe_timer = DASH_MOMENTUM_IFRAME
-			# If we touch ground and iframe expired, cancel momentum
 			elif on_floor and momentum_iframe_timer <= 0:
 				has_dash_momentum = false
 				ground_touch_timer = 0
@@ -232,8 +271,10 @@ func _physics_process(delta):
 		
 		if Input.is_action_just_pressed("ui_jump"):
 			jump_buffer_timer = JUMP_BUFFER
+			# Add brief crouch lockout after any jump
+			crouch_lockout_timer = CROUCH_LOCKOUT
 		
-		# Wall jumps (always allowed, cancels momentum)
+		# Wall jumps
 		if jump_buffer_timer > 0 and wall_coyote_timer > 0:
 			var is_holding_toward_wall = (input_left and last_wall_dir == -1) or (input_right and last_wall_dir == 1)
 			
@@ -265,18 +306,23 @@ func _physics_process(delta):
 				momentum_iframe_timer = 0
 				momentum_jump_used = false
 		
-		# Ground jump (blocked if momentum jump already used)
-		elif jump_buffer_timer > 0 and coyote_timer > 0 and not momentum_jump_used:
+		# Ground jump
+		elif jump_buffer_timer > 0 and coyote_timer > 0 and not momentum_jump_used and not is_crouching:
 			velocity.y = JUMP_FORCE
 			jump_buffer_timer = 0
 			coyote_timer = 0
 			
-			# Apply dash momentum if jumping within window
+			# Apply dash momentum
 			if ground_touch_timer > 0 and has_dash_momentum:
 				velocity.x = dash_momentum_direction * DASH_MOMENTUM_SPEED
 				momentum_iframe_timer = DASH_MOMENTUM_IFRAME
 				momentum_jump_used = true
 				has_dash = true  # Refund dash on momentum jump
+			else:
+				# Normal jump without momentum
+				has_dash_momentum = false
+				ground_touch_timer = 0
+				momentum_iframe_timer = 0
 		
 		
 		# === WALL STICK ===
@@ -320,22 +366,27 @@ func _physics_process(delta):
 		
 		# === HORIZONTAL MOVEMENT ===
 		
+		# Apply crouch speed multiplier
+		var current_speed = SPEED
+		if is_crouching:
+			current_speed *= CROUCH_SPEED_MULT
+		
 		if wall_hop_timer > 0:
 			# Locked during first half of wall hop
 			if wall_hop_timer < WALL_HOP_LOCK * 0.5:
-				velocity.x = lerp(velocity.x, move_dir * SPEED, delta * 8.0)
+				velocity.x = lerp(velocity.x, move_dir * current_speed, delta * 8.0)
 		
 		elif wall_jump_timer > 0:
 			# Slight lock on wall jump
 			if wall_jump_timer < WALL_JUMP_LOCK * 0.3:
-				velocity.x = lerp(velocity.x, move_dir * SPEED, delta * 10.0)
+				velocity.x = lerp(velocity.x, move_dir * current_speed, delta * 10.0)
 		
 		# Keep momentum if active
 		elif has_dash_momentum:
 			velocity.x = dash_momentum_direction * DASH_MOMENTUM_SPEED
 		
 		else:
-			velocity.x = move_dir * SPEED
+			velocity.x = move_dir * current_speed
 		
 		
 		# === WALL SLIDE ===
@@ -345,6 +396,65 @@ func _physics_process(delta):
 	
 	
 	move_and_slide()
+
+
+func can_stand_up():
+	if not is_crouching or not collision_shape or not collision_shape.shape:
+		return true
+	
+	# Check Head Space
+	var space_state = get_world_2d().direct_space_state
+	var query = PhysicsShapeQueryParameters2D.new()
+	
+	# Temporary Shape
+	var test_shape
+	if collision_shape.shape is RectangleShape2D:
+		test_shape = RectangleShape2D.new()
+		test_shape.size = Vector2(collision_shape.shape.size.x, original_height)
+	elif collision_shape.shape is CapsuleShape2D:
+		test_shape = CapsuleShape2D.new()
+		test_shape.radius = collision_shape.shape.radius
+		test_shape.height = original_height
+	else:
+		return true  # Unknown shape type, allow standing
+	
+	query.shape = test_shape
+	query.collision_mask = collision_mask
+	query.exclude = [self]
+	
+	query.transform = global_transform
+	
+	var result = space_state.intersect_shape(query, 1)
+	
+	# If no collision detected, we can stand up
+	return result.size() == 0
+
+
+func update_crouch_shape(crouching: bool):
+	if not collision_shape or not collision_shape.shape:
+		return
+	
+	if collision_shape.shape is RectangleShape2D:
+		if crouching:
+			var old_height = collision_shape.shape.size.y
+			collision_shape.shape.size.y = original_height * CROUCH_SCALE
+			# Move the shape up so the bottom stays in place
+			var height_diff = old_height - collision_shape.shape.size.y
+			collision_shape.position.y -= height_diff / 2
+		else:
+			collision_shape.shape.size.y = original_height
+			collision_shape.position.y = 0  # Reset to original position
+			
+	elif collision_shape.shape is CapsuleShape2D:
+		if crouching:
+			var old_height = collision_shape.shape.height
+			collision_shape.shape.height = original_height * CROUCH_SCALE
+			# Move the shape up so the bottom stays in place
+			var height_diff = old_height - collision_shape.shape.height
+			collision_shape.position.y -= height_diff / 2
+		else:
+			collision_shape.shape.height = original_height
+			collision_shape.position.y = 0  # Reset to original position
 
 
 func get_wall_dir():
