@@ -1,0 +1,43 @@
+[gd_scene load_steps=5 format=3 uid="uid://brgksie6pqnem"]
+
+[ext_resource type="Script" path="res://Scripts/player.gd" id="1_2ucfo"]
+[ext_resource type="Texture2D" uid="uid://dpicpoyreb8on" path="res://Assets/OIP (2).webp" id="2_p4n6h"]
+
+[sub_resource type="RectangleShape2D" id="RectangleShape2D_lygrv"]
+size = Vector2(73, 158)
+
+[sub_resource type="GDScript" id="GDScript_sm55u"]
+script/source = "extends Camera2D
+
+func _process(_delta):
+	# Get the target position (parent if camera is child of player)
+	var target_pos = get_parent().global_position if get_parent() else global_position
+	
+	# Smoothly follow
+	global_position = global_position.lerp(target_pos, 0.1)
+	
+	# Then snap to whole pixels for crispness
+	offset = offset.round()
+	global_position = global_position.round()
+"
+
+[node name="Player" type="CharacterBody2D"]
+texture_filter = 1
+scale = Vector2(0.214217, -0.239571)
+script = ExtResource("1_2ucfo")
+
+[node name="Sprite2D" type="Sprite2D" parent="."]
+position = Vector2(0, -9.53674e-07)
+scale = Vector2(0.405405, 0.851351)
+texture = ExtResource("2_p4n6h")
+
+[node name="CollisionShape2D" type="CollisionShape2D" parent="."]
+z_index = 1
+position = Vector2(0.5, 0)
+shape = SubResource("RectangleShape2D_lygrv")
+
+[node name="Camera" type="Camera2D" parent="."]
+zoom = Vector2(3, 3)
+position_smoothing_enabled = true
+position_smoothing_speed = 4.0
+script = SubResource("GDScript_sm55u")
