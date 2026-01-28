@@ -18,7 +18,8 @@ const COYOTE_TIME = 0.12
 const JUMP_BUFFER = 0.12
 
 # Wall movement
-const WALL_SLIDE_SPEED = 400
+const WALL_SLIDE_SPEED = 10000
+const WALL_SLIDE_GRAVITY = 3000
 const WALL_STICK_TIME = 0.08
 const WALL_COYOTE_TIME = 0.04
 
@@ -124,6 +125,16 @@ func _physics_process(delta):
 	if move_dir != 0:
 		last_move_dir = move_dir
 	
+	# Update wall info EARLY so we can use it
+	if on_wall and not on_floor:
+		wall_dir = get_wall_dir()
+		last_wall_dir = wall_dir
+	
+	# Calculate if holding toward wall EARLY
+	var holding_toward_wall = false
+	if on_wall:
+		holding_toward_wall = (input_left and wall_dir == -1) or (input_right and wall_dir == 1)
+	
 	
 	# === CROUCH ===
 	
@@ -178,7 +189,11 @@ func _physics_process(delta):
 			
 			# Activate dash
 			is_dashing = true
-			dash_timer = DASH_DURATION
+			# CHANGE: Make down dash infinite
+			if was_diagonal_dash:
+				dash_timer = 999.0
+			else:
+				dash_timer = DASH_DURATION
 			dash_buffer_timer = 0
 			wall_sticking = false
 			coyote_timer = 0
@@ -204,8 +219,14 @@ func _physics_process(delta):
 		dash_timer -= delta
 		velocity = dash_direction * DASH_SPEED
 		
+		# Cancel dash if hit wall
+		if on_wall and not on_floor:
+			is_dashing = false
+			velocity.x = 0
+			velocity.y = 0
+		
 		# Cancel dash early if diagonal dash hits ground
-		if on_floor and was_diagonal_dash:
+		elif on_floor and was_diagonal_dash:
 			is_dashing = false
 			has_dash_momentum = true
 			dash_momentum_direction = dash_direction.x
@@ -216,8 +237,8 @@ func _physics_process(delta):
 			velocity.x = dash_direction.x * SPEED * 0.5
 			velocity.y = 0
 		
-		# Normal dash end
-		elif dash_timer <= 0:
+		# Normal dash end (CHANGE: only for horizontal dash)
+		elif dash_timer <= 0 and not was_diagonal_dash:
 			is_dashing = false
 			velocity.x = dash_direction.x * SPEED * 0.5
 			velocity.y = dash_direction.y * SPEED * 0.5
@@ -226,6 +247,14 @@ func _physics_process(delta):
 	# === NORMAL MOVEMENT ===
 	
 	else:
+		# Cancel momentum if hit wall
+		if on_wall and not on_floor and has_dash_momentum:
+			has_dash_momentum = false
+			ground_touch_timer = 0
+			momentum_iframe_timer = 0
+			momentum_jump_used = false
+			velocity.x = 0
+		
 		# Refund dash on ground
 		if on_floor and not has_dash:
 			has_dash = true
@@ -235,9 +264,15 @@ func _physics_process(delta):
 			has_dash = true
 		
 		# Check for directional cancel during momentum
-		if has_dash_momentum and move_dir != 0:
-			# Momentum Cancel
-			if sign(move_dir) != sign(dash_momentum_direction):
+		if has_dash_momentum:
+			# Cancel if holding opposite direction
+			if move_dir != 0 and sign(move_dir) != sign(dash_momentum_direction):
+				has_dash_momentum = false
+				ground_touch_timer = 0
+				momentum_iframe_timer = 0
+				momentum_jump_used = false
+			# Cancel if not holding any direction (letting go)
+			elif move_dir == 0:
 				has_dash_momentum = false
 				ground_touch_timer = 0
 				momentum_iframe_timer = 0
@@ -260,10 +295,8 @@ func _physics_process(delta):
 			wall_hop_timer = 0
 			wall_jump_timer = 0
 		
-		# Update wall info
+		# Update wall coyote time
 		if on_wall and not on_floor:
-			wall_dir = get_wall_dir()
-			last_wall_dir = wall_dir
 			wall_coyote_timer = WALL_COYOTE_TIME
 		
 		
@@ -327,8 +360,6 @@ func _physics_process(delta):
 		
 		# === WALL STICK ===
 		
-		var holding_toward_wall = (input_left and wall_dir == -1) or (input_right and wall_dir == 1)
-		
 		# Start wall stick
 		if on_wall and not on_floor and not wall_sticking and wall_hop_timer <= 0 and wall_jump_timer <= 0 and holding_toward_wall:
 			wall_sticking = true
@@ -340,7 +371,7 @@ func _physics_process(delta):
 				wall_sticking = false
 			else:
 				wall_stick_timer -= delta
-				velocity.y = 0
+				velocity.y = 0  # Keep at 0 during stick
 				if wall_stick_timer <= 0:
 					wall_sticking = false
 		
@@ -354,14 +385,24 @@ func _physics_process(delta):
 		# === GRAVITY ===
 		
 		if not wall_sticking:
-			if velocity.y < 0:
-				velocity.y += GRAVITY * delta
-			else:
-				velocity.y += FALL_GRAVITY * delta
+			var is_wall_sliding = on_wall and not on_floor and velocity.y >= 0 and holding_toward_wall
 			
-			# Cap fall speed
-			if velocity.y > MAX_FALL_SPEED:
-				velocity.y = MAX_FALL_SPEED
+			if is_wall_sliding:
+				# Apply wall slide gravity
+				velocity.y += WALL_SLIDE_GRAVITY * delta
+				# Cap at wall slide speed
+				if velocity.y > WALL_SLIDE_SPEED:
+					velocity.y = WALL_SLIDE_SPEED
+			else:
+				# Apply normal gravity
+				if velocity.y < 0:
+					velocity.y += GRAVITY * delta
+				else:
+					velocity.y += FALL_GRAVITY * delta
+				
+				# Cap at normal fall speed
+				if velocity.y > MAX_FALL_SPEED:
+					velocity.y = MAX_FALL_SPEED
 		
 		
 		# === HORIZONTAL MOVEMENT ===
@@ -387,12 +428,6 @@ func _physics_process(delta):
 		
 		else:
 			velocity.x = move_dir * current_speed
-		
-		
-		# === WALL SLIDE ===
-		
-		if on_wall and not on_floor and not wall_sticking and velocity.y > 0:
-			velocity.y = min(velocity.y, WALL_SLIDE_SPEED)
 	
 	
 	move_and_slide()
@@ -426,7 +461,6 @@ func can_stand_up():
 	
 	var result = space_state.intersect_shape(query, 1)
 	
-	# If no collision detected, we can stand up
 	return result.size() == 0
 
 
