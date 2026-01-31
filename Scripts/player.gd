@@ -32,8 +32,8 @@ const WALL_HOP_FORCE = Vector2(200, -380)
 const WALL_HOP_LOCK = 0.18
 
 # Dash
-const DASH_SPEED = 650
-const DASH_DURATION = 0.2
+const DASH_SPEED = 600
+const DASH_DURATION = 0.15
 const DASH_BUFFER = 0.1
 const ALLOW_DIAGONAL_DASH = true
 const GROUND_DASH_COOLDOWN = 0.8
