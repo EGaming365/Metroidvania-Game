@@ -42,6 +42,7 @@ const GROUND_DASH_COOLDOWN = 0.8
 const DASH_MOMENTUM_SPEED = 500
 const DASH_MOMENTUM_WINDOW = 0.15
 const DASH_MOMENTUM_IFRAME = 0.1
+const MOMENTUM_JUMP_FORCE_MULT = 1.15
 
 
 # Timers
@@ -341,21 +342,22 @@ func _physics_process(delta):
 		
 		# Ground jump
 		elif jump_buffer_timer > 0 and coyote_timer > 0 and not momentum_jump_used and not is_crouching:
-			velocity.y = JUMP_FORCE
-			jump_buffer_timer = 0
-			coyote_timer = 0
-			
 			# Apply dash momentum
 			if ground_touch_timer > 0 and has_dash_momentum:
+				velocity.y = JUMP_FORCE * MOMENTUM_JUMP_FORCE_MULT
 				velocity.x = dash_momentum_direction * DASH_MOMENTUM_SPEED
 				momentum_iframe_timer = DASH_MOMENTUM_IFRAME
 				momentum_jump_used = true
 				has_dash = true  # Refund dash on momentum jump
 			else:
 				# Normal jump without momentum
+				velocity.y = JUMP_FORCE
 				has_dash_momentum = false
 				ground_touch_timer = 0
 				momentum_iframe_timer = 0
+			
+			jump_buffer_timer = 0
+			coyote_timer = 0
 		
 		
 		# === WALL STICK ===
